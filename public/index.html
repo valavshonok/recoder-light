@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Screen Recorder</title>
+
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 700px;
+        margin: 50px auto;
+        padding: 20px;
+      }
+
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px;
+        margin-bottom: 15px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 12px 20px;
+        margin-right: 10px;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      #status {
+        margin-top: 20px;
+        padding: 15px;
+        background: #f1f1f1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Запись экрана</h1>
+
+    <div>
+      Пример названия:
+      <span id="exampleName">КТбо1-10 Иванов Иван Иванович</span>
+
+      <button id="copyExampleButton" type="button">Скопировать пример</button>
+    </div>
+
+    <br />
+    <br />
+
+    <input
+      id="recordingName"
+      type="text"
+      maxlength="200"
+      placeholder="Название записи"
+    />
+
+    <div>
+      <button id="startButton" type="button">Начать запись</button>
+
+      <button id="stopButton" type="button" disabled>Остановить запись</button>
+    </div>
+
+    <div id="status">Готов к записи</div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
