@@ -6,7 +6,6 @@ const crypto = require("crypto");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
-
 const RECORDINGS_DIR = path.join(__dirname, "recordings");
 
 // Создаём папку recordings,
@@ -16,7 +15,6 @@ fs.mkdirSync(RECORDINGS_DIR, {
 });
 
 app.use(express.json());
-
 app.use(express.static(path.join(__dirname, "public")));
 
 /*
@@ -36,20 +34,18 @@ const recordings = new Map();
 
 /*
     --------------------------------------------------
+    НАСТРОЙКИ БУФЕРА CHUNK
+    --------------------------------------------------
+*/
+
+const CHUNK_BUFFER_SIZE = 4;
+
+/*
+    --------------------------------------------------
     ОЧИСТКА ИМЕНИ ФАЙЛА
     --------------------------------------------------
-
-    Пользователь может написать:
-
-    Лекция по Node.js
-
-    Получим:
-
-    Лекция по Node.js.webm
-
-    Но нельзя позволять пользователю
-    передавать ../ и подобные вещи.
 */
+
 function sanitizeFileName(name) {
   let result = String(name || "").trim();
 
@@ -78,13 +74,8 @@ function sanitizeFileName(name) {
     --------------------------------------------------
     ПОЛУЧЕНИЕ СВОБОДНОГО ИМЕНИ
     --------------------------------------------------
-
-    Например:
-
-    lecture.webm
-    lecture (1).webm
-    lecture (2).webm
 */
+
 function getUniqueFileName(name) {
   const safeName = sanitizeFileName(name);
 
@@ -101,9 +92,6 @@ function getUniqueFileName(name) {
 
     const filePath = path.join(RECORDINGS_DIR, filename);
 
-    /*
-            Проверяем существование.
-        */
     if (!fs.existsSync(filePath)) {
       return {
         filename,
@@ -113,6 +101,130 @@ function getUniqueFileName(name) {
 
     number++;
   }
+}
+
+/*
+    --------------------------------------------------
+    ЗАПИСЬ CHUNK ИЗ БУФЕРА
+    --------------------------------------------------
+
+    Берём chunk с самым маленьким номером.
+
+    Если он уже был записан или устарел —
+    просто удаляем его из буфера.
+
+    В файл записываем только chunk,
+    который идёт следующим после lastChunk.
+*/
+
+function flushSmallestChunk(recording) {
+  if (recording.chunkBuffer.size === 0) {
+    return false;
+  }
+
+  // Получаем самый маленький номер chunk.
+  const chunkNumbers = [...recording.chunkBuffer.keys()];
+  const smallestChunkNumber = Math.min(...chunkNumbers);
+
+  const chunk = recording.chunkBuffer.get(smallestChunkNumber);
+
+  // Удаляем из буфера сразу.
+  recording.chunkBuffer.delete(smallestChunkNumber);
+
+  /*
+        Если chunk уже был записан —
+        просто пропускаем его.
+    */
+  if (smallestChunkNumber <= recording.lastChunk) {
+    console.log(
+      `Skipping old chunk ${smallestChunkNumber} -> ${recording.filename}`,
+    );
+
+    return true;
+  }
+
+  /*
+        Записываем chunk в конец файла.
+    */
+  fs.appendFileSync(recording.filePath, chunk);
+
+  recording.lastChunk = smallestChunkNumber;
+
+  console.log(`Chunk ${smallestChunkNumber} -> ${recording.filename}`);
+
+  return true;
+}
+
+/*
+    --------------------------------------------------
+    ОПУСТОШИТЬ БУФЕР
+    --------------------------------------------------
+
+    Используется при finish.
+
+    Например:
+
+    lastChunk = 10
+
+    buffer:
+    11
+    12
+    13
+
+    Запишет:
+
+    11
+    12
+    13
+*/
+
+function flushAllChunks(recording) {
+  while (recording.chunkBuffer.size > 0) {
+    const chunkNumbers = [...recording.chunkBuffer.keys()];
+    const smallestChunkNumber = Math.min(...chunkNumbers);
+
+    const chunk = recording.chunkBuffer.get(smallestChunkNumber);
+
+    recording.chunkBuffer.delete(smallestChunkNumber);
+
+    /*
+            Старый chunk.
+        */
+    if (smallestChunkNumber <= recording.lastChunk) {
+      console.log(
+        `Skipping old chunk ${smallestChunkNumber} -> ${recording.filename}`,
+      );
+
+      continue;
+    }
+
+    /*
+            Если обнаружилась дырка —
+            мы не можем безопасно собрать видео.
+        */
+    if (smallestChunkNumber !== recording.lastChunk + 1) {
+      console.error(
+        `Missing chunk before ${smallestChunkNumber} -> ${recording.filename}`,
+        {
+          lastChunk: recording.lastChunk,
+          received: smallestChunkNumber,
+        },
+      );
+
+      // Возвращаем chunk обратно.
+      recording.chunkBuffer.set(smallestChunkNumber, chunk);
+
+      return false;
+    }
+
+    fs.appendFileSync(recording.filePath, chunk);
+
+    recording.lastChunk = smallestChunkNumber;
+
+    console.log(`Chunk ${smallestChunkNumber} -> ${recording.filename}`);
+  }
+
+  return true;
 }
 
 /*
@@ -138,63 +250,61 @@ app.post("/api/recordings/start", (req, res) => {
     }
 
     /*
-                Генерируем внутренний ID.
-
-                Он НЕ используется как имя файла.
-            */
+            Генерируем внутренний ID.
+        */
     const id = crypto.randomUUID();
 
     /*
-                Получаем:
-
-                lecture.webm
-
-                или:
-
-                lecture (1).webm
-            */
+            Получаем имя файла.
+        */
     const { filename, filePath } = getUniqueFileName(name);
 
     /*
-                Создаём пустой файл.
-            */
+            Создаём пустой файл.
+        */
     fs.writeFileSync(filePath, "");
 
     /*
-                Сохраняем информацию
-                о текущей записи.
-            */
+            Сохраняем информацию
+            о текущей записи.
+        */
     recordings.set(id, {
       id,
 
-      // Имя, которое ввёл пользователь
+      // Имя пользователя
       name,
 
       // Реальное имя файла
       filename,
 
-      // Путь на сервере
+      // Путь
       filePath,
 
       status: "recording",
 
       createdAt: new Date().toISOString(),
 
+      /*
+                Последний chunk,
+                реально записанный в файл.
+            */
       lastChunk: -1,
+
+      /*
+                Буфер chunks.
+
+                key   = номер chunk
+                value = Buffer
+            */
+      chunkBuffer: new Map(),
     });
 
     console.log(`Recording started: ${filename}`);
 
     res.json({
       success: true,
-
-      // Клиенту нужен только ID
       id,
-
-      // Можно показать пользователю
       name,
-
-      // Для информации
       filename,
     });
   } catch (error) {
@@ -210,8 +320,6 @@ app.post("/api/recordings/start", (req, res) => {
     --------------------------------------------------
     CHUNK
     --------------------------------------------------
-
-    Получаем бинарный WebM chunk.
 */
 
 app.post(
@@ -255,54 +363,80 @@ app.post(
       }
 
       /*
-                Если браузер повторно прислал
-                уже сохранённый chunk —
-                второй раз его не записываем.
+                --------------------------------------------------
+                ЕСЛИ CHUNK УЖЕ ЗАПИСАН
+                --------------------------------------------------
+
+                Например:
+
+                lastChunk = 10
+
+                пришёл chunk 7
+
+                Он нам уже не нужен.
             */
+
       if (chunkNumber <= recording.lastChunk) {
         return res.json({
           success: true,
           duplicate: true,
+          skipped: true,
           chunkNumber,
         });
       }
 
       /*
-                Ждём chunks по порядку.
-
-                Например:
-
-                0
-                1
-                2
-                3
+                --------------------------------------------------
+                ЕСЛИ CHUNK УЖЕ ЕСТЬ В БУФЕРЕ
+                --------------------------------------------------
             */
-      if (chunkNumber !== recording.lastChunk + 1) {
-        return res.status(409).json({
-          error: "Chunk пришёл не по порядку",
 
-          expected: recording.lastChunk + 1,
-
-          received: chunkNumber,
+      if (recording.chunkBuffer.has(chunkNumber)) {
+        return res.json({
+          success: true,
+          duplicate: true,
+          buffered: true,
+          chunkNumber,
         });
       }
 
       /*
-                Дописываем chunk
-                в нужный файл.
+                --------------------------------------------------
+                КЛАДЁМ CHUNK В БУФЕР
+                --------------------------------------------------
             */
-      fs.appendFileSync(recording.filePath, req.body);
 
-      recording.lastChunk = chunkNumber;
+      recording.chunkBuffer.set(chunkNumber, req.body);
 
-      console.log(`Chunk ${chunkNumber} -> ${recording.filename}`);
+      console.log(
+        `Chunk ${chunkNumber} buffered -> ${recording.filename}`,
+        `(buffer: ${recording.chunkBuffer.size}/${CHUNK_BUFFER_SIZE})`,
+      );
 
       /*
-                ACK.
+                --------------------------------------------------
+                ЕСЛИ БУФЕР ДОСТИГ 4
+                --------------------------------------------------
+
+                Пытаемся записать самый маленький chunk.
             */
-      res.json({
+
+      if (recording.chunkBuffer.size >= CHUNK_BUFFER_SIZE) {
+        flushSmallestChunk(recording);
+      }
+
+      /*
+                ACK отправляем сразу.
+
+                Клиенту не нужно ждать,
+                пока chunk физически попадёт в файл.
+            */
+      return res.json({
         success: true,
         chunkNumber,
+        buffered: true,
+        bufferSize: recording.chunkBuffer.size,
+        lastChunk: recording.lastChunk,
       });
     } catch (error) {
       console.error("CHUNK ERROR:", error);
@@ -345,6 +479,26 @@ app.post("/api/recordings/:id/finish", (req, res) => {
       });
     }
 
+    /*
+            --------------------------------------------------
+            СНАЧАЛА ОПУСТОШАЕМ БУФЕР
+            --------------------------------------------------
+        */
+
+    const flushed = flushAllChunks(recording);
+
+    if (!flushed) {
+      return res.status(409).json({
+        error: "Невозможно завершить запись: отсутствует chunk",
+        lastChunk: recording.lastChunk,
+        bufferedChunks: [...recording.chunkBuffer.keys()].sort((a, b) => a - b),
+      });
+    }
+
+    /*
+            Теперь все полученные chunks записаны.
+        */
+
     recording.status = "finished";
 
     recording.finishedAt = new Date().toISOString();
@@ -354,16 +508,6 @@ app.post("/api/recordings/:id/finish", (req, res) => {
     recording.size = stats.size;
 
     console.log(`Recording finished: ${recording.filename}`);
-
-    /*
-                ПОЗЖЕ ЗДЕСЬ БУДЕТ:
-
-                uploadToYandexDisk(...)
-
-                после успешной загрузки:
-
-                fs.unlinkSync(recording.filePath)
-            */
 
     res.json({
       success: true,
@@ -375,6 +519,8 @@ app.post("/api/recordings/:id/finish", (req, res) => {
       filename: recording.filename,
 
       size: recording.size,
+
+      lastChunk: recording.lastChunk,
     });
   } catch (error) {
     console.error("FINISH ERROR:", error);
@@ -402,12 +548,24 @@ app.get("/api/recordings/:id", (req, res) => {
 
   res.json({
     id: recording.id,
+
     name: recording.name,
+
     filename: recording.filename,
+
     status: recording.status,
+
     createdAt: recording.createdAt,
+
     finishedAt: recording.finishedAt || null,
+
     size: recording.size || 0,
+
+    lastChunk: recording.lastChunk,
+
+    bufferedChunks: recording.chunkBuffer
+      ? [...recording.chunkBuffer.keys()].sort((a, b) => a - b)
+      : [],
   });
 });
 
