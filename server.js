@@ -243,7 +243,7 @@ app.post("/api/recordings/start", (req, res) => {
       });
     }
 
-    if (name.length > 200) {
+    if (name.length > 300) {
       return res.status(400).json({
         error: "Название слишком длинное",
       });

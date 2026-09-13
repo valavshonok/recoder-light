@@ -270,7 +270,7 @@ async function finishRecording() {
             Для текущего простого MVP
             этого достаточно при нормальной сети.
         */
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     setStatus("Завершаем запись...");
 
