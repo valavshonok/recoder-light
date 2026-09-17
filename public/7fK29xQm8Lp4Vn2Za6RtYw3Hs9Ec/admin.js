@@ -161,7 +161,7 @@ function getFilteredAndSortedFiles() {
     --------------------------------------------------
 */
 
-const MAX_STORAGE_BYTES = 40 * 1024 * 1024 * 1024;
+const MAX_STORAGE_BYTES = 30 * 1024 * 1024 * 1024;
 
 function updateStorageUsage() {
   const totalBytes = allFiles.reduce((total, file) => {
