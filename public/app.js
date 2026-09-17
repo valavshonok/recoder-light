@@ -9,7 +9,7 @@ let nextChunkNumber = 0;
 let isRecording = false;
 let isStopping = false;
 
-const CHUNK_INTERVAL = 5000;
+const CHUNK_INTERVAL = 10000;
 
 const startButton = document.getElementById("startButton");
 
@@ -17,7 +17,7 @@ const stopButton = document.getElementById("stopButton");
 
 const recordingNameInput = document.getElementById("recordingName");
 
-const statusElement = document.getElementById("status");
+const logElement = document.getElementById("log");
 
 /*
     --------------------------------------------------
@@ -25,8 +25,16 @@ const statusElement = document.getElementById("status");
     --------------------------------------------------
 */
 
-function setStatus(text) {
-  statusElement.textContent = text;
+function addLog(text, type = "") {
+  const entry = document.createElement("div");
+
+  entry.className = `log-entry ${type}`;
+
+  entry.textContent = text;
+
+  logElement.appendChild(entry);
+
+  logElement.scrollTop = logElement.scrollHeight;
 }
 
 /*
@@ -60,10 +68,17 @@ async function startRecording() {
             Микрофон:
             НЕТ
         */
-    setStatus("Выберите экран для записи...");
+    addLog("Выберите экран для записи...");
+
+    // stream = await navigator.mediaDevices.getDisplayMedia({
+    //   video: true,
+    //   audio: false,
+    // });
 
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: {
+        frameRate: { ideal: 15, max: 30 },
+      },
       audio: false,
     });
 
@@ -71,7 +86,7 @@ async function startRecording() {
             Создаём запись
             на сервере.
         */
-    setStatus("Создаём запись...");
+    addLog("Создаём запись...");
 
     const response = await fetch("/api/recordings/start", {
       method: "POST",
@@ -106,6 +121,7 @@ async function startRecording() {
         */
     recorder = new MediaRecorder(stream, {
       mimeType: "video/webm",
+      videoBitsPerSecond: 500000, // По умолчанию 2500000
     });
 
     /*
@@ -161,7 +177,7 @@ async function startRecording() {
 
     recordingNameInput.disabled = true;
 
-    setStatus(`Идёт запись: ${recordingName}`);
+    addLog(`Идёт запись: ${recordingName}`);
   } catch (error) {
     console.error(error);
 
@@ -176,7 +192,7 @@ async function startRecording() {
     isRecording = false;
     isStopping = false;
 
-    setStatus("Запись не запущена");
+    addLog("Запись не запущена");
   }
 }
 
@@ -192,7 +208,7 @@ async function uploadChunk(blob, chunkNumber) {
   }
 
   try {
-    setStatus(`Идёт запись. Отправка chunk ${chunkNumber}...`);
+    addLog(`Идёт запись. Отправка chunk ${chunkNumber}...`);
 
     const response = await fetch(`/api/recordings/${recordingId}/chunk`, {
       method: "POST",
@@ -212,11 +228,11 @@ async function uploadChunk(blob, chunkNumber) {
 
     await response.json();
 
-    setStatus(`Идёт запись: ${recordingName}`);
+    addLog(`Идёт запись: ${recordingName}`);
   } catch (error) {
     console.error(`Ошибка chunk ${chunkNumber}:`, error);
 
-    setStatus(`Ошибка отправки chunk ${chunkNumber}`);
+    addLog(`Ошибка отправки chunk ${chunkNumber}`);
   }
 }
 
@@ -233,7 +249,7 @@ function stopRecording() {
 
   isStopping = true;
 
-  setStatus("Останавливаем запись...");
+  addLog("Останавливаем запись...");
 
   /*
         stop() вызовет последний
@@ -272,7 +288,7 @@ async function finishRecording() {
         */
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    setStatus("Завершаем запись...");
+    addLog("Завершаем запись...");
 
     const response = await fetch(`/api/recordings/${id}/finish`, {
       method: "POST",
@@ -286,11 +302,11 @@ async function finishRecording() {
 
     console.log("Finished:", data);
 
-    setStatus(`Готово: ${data.filename}`);
+    addLog(`Готово: ${data.filename}`);
   } catch (error) {
     console.error(error);
 
-    setStatus("Ошибка завершения записи");
+    addLog("Ошибка завершения записи");
   } finally {
     recorder = null;
     stream = null;

@@ -39,6 +39,32 @@
         padding: 15px;
         background: #f1f1f1;
       }
+
+      .log {
+        margin-top: 20px;
+        padding: 10px 14px;
+        height: 180px;
+        overflow-y: auto;
+        box-sizing: border-box;
+        background: #f5f5f5;
+        border: 1px solid #e0e0e0;
+        border-radius: 5px;
+        font-size: 13px;
+        color: #777;
+      }
+
+      .log-entry {
+        padding: 4px 0;
+        line-height: 1.4;
+      }
+
+      .log-entry.error {
+        color: #a66;
+      }
+
+      .log-entry.success {
+        color: #687;
+      }
     </style>
   </head>
 
@@ -48,7 +74,6 @@
     <div>
       Примеры названия:
       <div>КТбо1-10 Иванов Иван Иванович Тест</div>
-      <div>КТбо1-10 Иванов Иван Иванович КР</div>
       <div>КТбо1-10 Иванов Иван Иванович Лаба</div>
     </div>
 
@@ -67,7 +92,9 @@
       <button id="stopButton" type="button" disabled>Остановить запись</button>
     </div>
 
-    <div id="status">Готов к записи</div>
+    <div id="log" class="log">
+      <div class="log-entry">Готов к записи</div>
+    </div>
 
     <script src="/app.js"></script>
   </body>

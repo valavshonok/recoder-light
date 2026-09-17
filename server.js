@@ -2,6 +2,7 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 
 const app = express();
 
@@ -567,6 +568,387 @@ app.get("/api/recordings/:id", (req, res) => {
       ? [...recording.chunkBuffer.keys()].sort((a, b) => a - b)
       : [],
   });
+});
+
+/*
+    --------------------------------------------------
+    ADMIN API
+    --------------------------------------------------
+*/
+
+/*
+    Получить список всех файлов.
+*/
+app.get("/api/7fK29xQm8Lp4Vn2Za6RtYw3Hs9Ec/admin/files", (req, res) => {
+  try {
+    const files = fs
+      .readdirSync(RECORDINGS_DIR)
+      .filter((filename) => filename.toLowerCase().endsWith(".webm"))
+      .map((filename) => {
+        const filePath = path.join(RECORDINGS_DIR, filename);
+
+        const stats = fs.statSync(filePath);
+
+        return {
+          filename,
+          size: stats.size,
+          modifiedAt: stats.mtime.toISOString(),
+        };
+      })
+      .sort((a, b) => {
+        return new Date(b.modifiedAt) - new Date(a.modifiedAt);
+      });
+
+    res.json({
+      success: true,
+      files,
+    });
+  } catch (error) {
+    console.error("ADMIN FILES ERROR:", error);
+
+    res.status(500).json({
+      error: "Не удалось получить список файлов",
+    });
+  }
+});
+
+/*
+    --------------------------------------------------
+    DOWNLOAD FILE
+    --------------------------------------------------
+*/
+
+// app.get(
+//   "/api/7fK29xQm8Lp4Vn2Za6RtYw3Hs9Ec/admin/files/:filename/download",
+//   (req, res) => {
+//     try {
+//       const filename = path.basename(req.params.filename);
+
+//       if (!filename.toLowerCase().endsWith(".webm")) {
+//         return res.status(400).json({
+//           error: "Некорректный файл",
+//         });
+//       }
+
+//       const filePath = path.join(RECORDINGS_DIR, filename);
+
+//       if (!fs.existsSync(filePath)) {
+//         return res.status(404).json({
+//           error: "Файл не найден",
+//         });
+//       }
+
+//       res.download(filePath, filename);
+//     } catch (error) {
+//       console.error("ADMIN DOWNLOAD ERROR:", error);
+
+//       res.status(500).json({
+//         error: "Не удалось скачать файл",
+//       });
+//     }
+//   },
+// );
+
+/*
+    --------------------------------------------------
+    DOWNLOAD FILE
+    --------------------------------------------------
+
+    Исходный WebM не изменяем.
+
+    Перед скачиванием:
+    1. FFmpeg читает исходный WebM.
+    2. Пересобирает контейнер без перекодирования
+       видео и аудио.
+    3. Создаёт временный WebM.
+    4. Отдаём временный файл пользователю.
+    5. После скачивания удаляем временный файл.
+*/
+
+/*
+    --------------------------------------------------
+    DOWNLOAD FILE
+    --------------------------------------------------
+*/
+
+/*
+    --------------------------------------------------
+    DOWNLOAD FILE
+    --------------------------------------------------
+
+    Оригинальный WebM не изменяется.
+
+    При скачивании:
+
+    recordings/video.webm
+            ↓
+         FFmpeg
+        -c copy
+            ↓
+    recordings/tmp/.video.webm.UUID.final.webm
+            ↓
+        отправка клиенту
+            ↓
+       временный файл удаляется
+*/
+
+app.get(
+  "/api/7fK29xQm8Lp4Vn2Za6RtYw3Hs9Ec/admin/files/:filename/download",
+  (req, res) => {
+    try {
+      const filename = path.basename(req.params.filename);
+
+      if (!filename.toLowerCase().endsWith(".webm")) {
+        return res.status(400).json({
+          error: "Некорректный файл",
+        });
+      }
+      const filePath = path.join(RECORDINGS_DIR, filename);
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          error: "Файл не найден",
+        });
+      }
+
+      const tmpDir = path.join(RECORDINGS_DIR, "tmp");
+      fs.mkdirSync(tmpDir, {
+        recursive: true,
+      });
+      const tempFilename = `.${filename}.${crypto.randomUUID()}.final.webm`;
+
+      const tempPath = path.join(tmpDir, tempFilename);
+
+      let cleaned = false;
+
+      const cleanup = () => {
+        if (cleaned) {
+          return;
+        }
+
+        cleaned = true;
+
+        fs.unlink(tempPath, (unlinkError) => {
+          if (unlinkError) {
+            if (unlinkError.code !== "ENOENT") {
+              console.error("TEMP FILE DELETE ERROR:", unlinkError);
+            }
+
+            return;
+          }
+
+          console.log(`Temporary file deleted: ${tempFilename}`);
+        });
+      };
+
+      console.log(`Preparing download: ${filename}`);
+
+      execFile(
+        "ffmpeg",
+        ["-y", "-i", filePath, "-c", "copy", tempPath],
+        (error, stdout, stderr) => {
+          if (error) {
+            console.error("FFMPEG DOWNLOAD ERROR:", error);
+
+            console.error("FFMPEG STDERR:", stderr);
+
+            cleanup();
+
+            if (!res.headersSent) {
+              return res.status(500).json({
+                error: "Не удалось подготовить видео",
+              });
+            }
+
+            return;
+          }
+
+          if (!fs.existsSync(tempPath)) {
+            console.error("FFMPEG DID NOT CREATE TEMP FILE:", tempPath);
+
+            cleanup();
+
+            if (!res.headersSent) {
+              return res.status(500).json({
+                error: "FFmpeg не создал файл",
+              });
+            }
+
+            return;
+          }
+
+          let stats;
+
+          try {
+            stats = fs.statSync(tempPath);
+          } catch (statError) {
+            console.error("TEMP FILE STAT ERROR:", statError);
+
+            cleanup();
+
+            return res.status(500).json({
+              error: "Не удалось проверить подготовленный файл",
+            });
+          }
+
+          console.log(
+            `Finalized file ready: ${tempFilename}`,
+            `(${stats.size} bytes)`,
+          );
+
+          res.setHeader("Content-Type", "video/webm");
+
+          res.setHeader("Content-Length", stats.size);
+
+          res.setHeader(
+            "Content-Disposition",
+            `attachment; filename="${encodeURIComponent(filename)}"`,
+          );
+
+          const stream = fs.createReadStream(tempPath);
+
+          stream.on("error", (streamError) => {
+            console.error("DOWNLOAD STREAM ERROR:", streamError);
+
+            cleanup();
+
+            if (!res.headersSent) {
+              return res.status(500).json({
+                error: "Ошибка чтения файла",
+              });
+            }
+
+            res.destroy();
+          });
+
+          stream.on("end", () => {
+            console.log(`Download stream ended: ${filename}`);
+          });
+
+          res.on("close", () => {
+            console.log(`Download connection closed: ${filename}`);
+
+            cleanup();
+          });
+
+          stream.pipe(res);
+        },
+      );
+    } catch (error) {
+      console.error("ADMIN DOWNLOAD ERROR:", error);
+
+      res.status(500).json({
+        error: "Не удалось скачать файл",
+      });
+    }
+  },
+);
+
+/*
+    --------------------------------------------------
+    DELETE ONE FILE
+    --------------------------------------------------
+*/
+
+app.delete(
+  "/api/7fK29xQm8Lp4Vn2Za6RtYw3Hs9Ec/admin/files/:filename",
+  (req, res) => {
+    try {
+      const filename = path.basename(req.params.filename);
+
+      if (!filename.toLowerCase().endsWith(".webm")) {
+        return res.status(400).json({
+          error: "Некорректный файл",
+        });
+      }
+
+      const filePath = path.join(RECORDINGS_DIR, filename);
+
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+          error: "Файл не найден",
+        });
+      }
+
+      /*
+        Удаляем файл с диска.
+    */
+      fs.unlinkSync(filePath);
+
+      /*
+        Если файл связан с активной записью
+        в Map — удаляем её тоже.
+    */
+      for (const [id, recording] of recordings.entries()) {
+        if (recording.filename === filename) {
+          recordings.delete(id);
+          break;
+        }
+      }
+
+      console.log(`Admin deleted: ${filename}`);
+
+      res.json({
+        success: true,
+        filename,
+      });
+    } catch (error) {
+      console.error("ADMIN DELETE ERROR:", error);
+
+      res.status(500).json({
+        error: "Не удалось удалить файл",
+      });
+    }
+  },
+);
+
+/*
+    --------------------------------------------------
+    DELETE ALL FILES
+    --------------------------------------------------
+*/
+
+app.delete("/api/7fK29xQm8Lp4Vn2Za6RtYw3Hs9Ec/admin/files", (req, res) => {
+  try {
+    const files = fs
+      .readdirSync(RECORDINGS_DIR)
+      .filter((filename) => filename.toLowerCase().endsWith(".webm"));
+
+    let deleted = 0;
+
+    for (const filename of files) {
+      const filePath = path.join(RECORDINGS_DIR, filename);
+
+      try {
+        fs.unlinkSync(filePath);
+        deleted++;
+      } catch (error) {
+        console.error(`Не удалось удалить файл ${filename}:`, error);
+      }
+    }
+
+    /*
+        Очищаем Map от удалённых записей.
+    */
+    for (const [id, recording] of recordings.entries()) {
+      if (files.includes(recording.filename)) {
+        recordings.delete(id);
+      }
+    }
+
+    console.log(`Admin deleted all files: ${deleted}`);
+
+    res.json({
+      success: true,
+      deleted,
+    });
+  } catch (error) {
+    console.error("ADMIN DELETE ALL ERROR:", error);
+
+    res.status(500).json({
+      error: "Не удалось удалить файлы",
+    });
+  }
 });
 
 /*
